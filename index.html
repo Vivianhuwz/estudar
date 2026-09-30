@@ -1,0 +1,65 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Subjuntivo 练习</title><style>
+:root{--p:#7855b5;--bg:#f8f5fc;--line:#e5daf2;--text:#30283e;--muted:#81778d;--ok:#27915a;--bad:#d34e68}*{box-sizing:border-box}
+body{margin:0;background:var(--bg);font-family:Arial,"Microsoft YaHei",sans-serif;color:var(--text)}main{max-width:850px;margin:auto;padding:30px 18px}
+h1{margin:0;font-size:24px}.sub{color:var(--muted);margin:7px 0 20px}.top,.actions{display:flex;gap:9px;flex-wrap:wrap}.top{margin-bottom:10px}
+button,.file{border:1px solid var(--line);background:#fff;border-radius:10px;padding:9px 12px;cursor:pointer}.primary{background:var(--p);color:#fff;border-color:var(--p)}
+input[type=file]{display:none}.status{font-size:13px;color:var(--muted);margin:0 0 14px}.card{background:#fff;border:1px solid var(--line);border-radius:20px;padding:28px}
+.meta{display:flex;justify-content:space-between;color:var(--muted);font-size:13px}.cn{font-size:24px;font-weight:600;line-height:1.55;margin:26px 0}
+.words{display:flex;flex-wrap:wrap;gap:16px 8px;align-items:flex-end;min-height:80px}.plain{font-size:18px;padding:6px 2px}
+.word{border:0;border-bottom:3px solid #aa94c9;background:#fff;min-width:54px;max-width:170px;padding:6px 5px;text-align:center;font-size:18px;outline:none}
+.word.correct{color:var(--ok);border-bottom-color:var(--ok)}.word.wrong{color:var(--bad);border-bottom-color:var(--bad)}
+.mini{min-height:25px;margin-top:12px;font-size:14px}.ok{color:var(--ok)}.bad{color:var(--bad)}.answer{display:none;margin-top:14px;padding:12px;border:1px solid var(--line);border-radius:10px}
+.actions{justify-content:space-between;margin-top:20px}.stats{text-align:center;color:var(--muted);font-size:13px;margin-top:18px}
+</style></head><body><main><h1>中文 → Português</h1><div class="sub">Subjuntivo · 整句 / 时态动词双模式</div>
+<div class="top"><button id="fullMode" class="primary">整句练习</button><button id="verbMode">只练时态动词</button><button id="all" class="primary">全部题目</button><button id="mistakes">错题本 <span id="mc">0</span></button><button id="shuffle">随机</button><button id="online">☁️ 加载在线题库</button><label class="file">📂 导入本地 Excel<input id="file" type="file" accept=".xlsx"></label></div>
+<div id="sourceStatus" class="status">当前题库：内置测试题</div>
+<div class="card"><div class="meta"><span id="tense"></span><span id="pos"></span></div><div class="cn" id="cn"></div><div class="words" id="words"></div><div id="mini" class="mini"></div><div id="answerBox" class="answer"></div>
+<div class="actions"><button id="prev">← 上一题</button><div><button id="answerToggle">👁 显示答案</button> <button class="primary" id="next">下一题 →</button></div></div></div><div class="stats" id="stats"></div>
+<script>
+const $=id=>document.getElementById(id),norm=s=>String(s).toLocaleLowerCase("pt-BR").normalize("NFC").replace(/[.,!?;:]$/,"").trim(),tokens=s=>String(s).trim().split(/\s+/),key=q=>q.cn+"|||"+q.pt;
+const demo=[{tense:"Presente do Subjuntivo",cn:"我希望你今天做这件事。",pt:"Quero que você faça isso hoje.",practice:["faça"]},{tense:"Pretérito Imperfeito do Subjuntivo",cn:"如果我有时间，我会多旅行。",pt:"Se eu tivesse tempo, viajaria mais.",practice:["tivesse","viajaria"]},{tense:"Futuro do Subjuntivo",cn:"如果我有时间，我会给你打电话。",pt:"Se eu tiver tempo, vou ligar para você.",practice:["tiver"]}];
+let data=JSON.parse(localStorage.getItem("wb_data")||"null")||demo,mist=JSON.parse(localStorage.getItem("wb_mist")||"{}"),practiceMode="full",view="all",list=[],idx=0;
+
+async function unzipXlsx(buffer){
+ const u=new Uint8Array(buffer), dv=new DataView(buffer); let eocd=-1;
+ for(let i=u.length-22;i>=Math.max(0,u.length-65557);i--) if(dv.getUint32(i,true)===0x06054b50){eocd=i;break}
+ if(eocd<0)throw new Error("这不是有效的 .xlsx 文件");
+ const total=dv.getUint16(eocd+10,true), cd=dv.getUint32(eocd+16,true); let p=cd, files={};
+ for(let n=0;n<total;n++){
+  if(dv.getUint32(p,true)!==0x02014b50)throw new Error("Excel ZIP目录损坏");
+  const method=dv.getUint16(p+10,true),cs=dv.getUint32(p+20,true),fn=dv.getUint16(p+28,true),ex=dv.getUint16(p+30,true),cm=dv.getUint16(p+32,true),off=dv.getUint32(p+42,true);
+  const name=new TextDecoder().decode(u.slice(p+46,p+46+fn)); const lfn=dv.getUint16(off+26,true),lex=dv.getUint16(off+28,true),start=off+30+lfn+lex; let bytes=u.slice(start,start+cs);
+  if(method===8){const ds=new DecompressionStream("deflate-raw");bytes=new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(ds)).arrayBuffer())}
+  else if(method!==0)throw new Error("浏览器不支持这个 Excel 压缩格式");
+  files[name]=bytes;p+=46+fn+ex+cm;
+ } return files;
+}
+const xmlText=b=>new TextDecoder("utf-8").decode(b),xmlDoc=s=>new DOMParser().parseFromString(s,"application/xml");
+async function readXlsx(buffer){
+ const f=await unzipXlsx(buffer); if(!f["xl/workbook.xml"])throw new Error("Excel 缺少 workbook.xml");
+ let shared=[]; if(f["xl/sharedStrings.xml"]){const d=xmlDoc(xmlText(f["xl/sharedStrings.xml"]));shared=[...d.getElementsByTagName("si")].map(si=>[...si.getElementsByTagName("t")].map(t=>t.textContent).join(""))}
+ const rel=xmlDoc(xmlText(f["xl/_rels/workbook.xml.rels"])), rels={};[...rel.getElementsByTagName("Relationship")].forEach(x=>rels[x.getAttribute("Id")]=x.getAttribute("Target"));
+ const wb=xmlDoc(xmlText(f["xl/workbook.xml"])),sheet=wb.getElementsByTagName("sheet")[0]; if(!sheet)throw new Error("Excel 没有工作表");
+ const rid=sheet.getAttribute("r:id")||sheet.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships","id"),target=rels[rid]||"worksheets/sheet1.xml",path=target.startsWith("/")?target.slice(1):"xl/"+target.replace(/^xl\//,"");
+ if(!f[path])throw new Error("找不到第一张工作表");
+ const d=xmlDoc(xmlText(f[path])), rows=[]; for(const row of d.getElementsByTagName("row")){let arr=[];for(const c of row.getElementsByTagName("c")){const ref=c.getAttribute("r")||"A1",letters=(ref.match(/[A-Z]+/)||["A"])[0];let col=0;for(const ch of letters)col=col*26+ch.charCodeAt(0)-64;col--;const type=c.getAttribute("t");let val="";if(type==="inlineStr"){val=[...c.getElementsByTagName("t")].map(t=>t.textContent).join("")}else{const v=c.getElementsByTagName("v")[0]?.textContent??"";val=type==="s"?(shared[Number(v)]??""):v}arr[col]=val}rows.push(arr)} return rows;
+}
+async function importBuffer(buffer,label){
+ const rows=await readXlsx(buffer);if(rows.length<2)throw new Error("Excel 没有题目");
+ const clean=x=>String(x??"").replace(/^\uFEFF/,"").trim(),h=rows.shift().map(x=>clean(x).toLowerCase()),find=a=>{for(const n of a){let i=h.indexOf(n.toLowerCase());if(i>=0)return i}return -1};
+ const it=find(["tense","时态"]),ic=find(["chinese","中文"]),ip=find(["portuguese","葡萄牙语","português","portugues"]),iw=find(["practice_words","practice words","练习动词"]);
+ if(ic<0||ip<0)throw new Error("表头需要 chinese 和 portuguese");
+ const d=rows.map(r=>({tense:it>=0?clean(r[it]):"",cn:clean(r[ic]),pt:clean(r[ip]),practice:iw>=0?clean(r[iw]).split("|").map(x=>x.trim()).filter(Boolean):[]})).filter(q=>q.cn&&q.pt);
+ if(!d.length)throw new Error("没有找到可导入题目");data=d;localStorage.setItem("wb_data",JSON.stringify(data));localStorage.setItem("wb_source",label);view="all";refresh();$("sourceStatus").textContent=`当前题库：${label} · ${d.length}题`;return d.length;
+}
+function refresh(){list=view==="mist"?data.filter(q=>mist[key(q)]):[...data];idx=0;render()}
+function render(){if(!list.length){$("cn").textContent="目前没有题目";$("words").innerHTML="";$("tense").textContent="";$("pos").textContent="0 / 0";return}const q=list[idx],ts=tokens(q.pt),ps=(q.practice||[]).map(norm);$("cn").textContent=q.cn;$("tense").textContent=q.tense;$("pos").textContent=`${idx+1} / ${list.length}`;$("mini").textContent="";$("answerBox").style.display="none";$("answerBox").textContent=q.pt;$("answerToggle").textContent="👁 显示答案";$("words").innerHTML=ts.map((w,i)=>practiceMode==="full"||ps.includes(norm(w))?`<input class="word" data-ti="${i}" style="width:${Math.max(54,Math.min(170,w.length*11+28))}px" autocomplete="off" spellcheck="false">`:`<span class="plain">${w}</span>`).join("");const ins=[...document.querySelectorAll(".word")];ins.forEach((el,j)=>el.onkeydown=e=>{if(e.key==="Enter"){e.preventDefault();check(el,j,ins,ts,q)}});ins[0]?.focus();stats()}
+function check(el,j,ins,ts,q){if(!el.value.trim())return;const ti=+el.dataset.ti,ok=norm(el.value)===norm(ts[ti]);el.classList.remove("correct","wrong");el.classList.add(ok?"correct":"wrong");$("mini").className="mini "+(ok?"ok":"bad");$("mini").textContent=ok?"✓ 正确":"✕ 正确答案："+ts[ti];if(!ok){mist[key(q)]=true;localStorage.setItem("wb_mist",JSON.stringify(mist))}stats();if(j<ins.length-1)ins[j+1].focus()}
+function next(){if(list.length){idx=(idx+1)%list.length;render()}}function prev(){if(list.length){idx=(idx-1+list.length)%list.length;render()}}function stats(){$("mc").textContent=Object.keys(mist).length;$("stats").textContent=`题库 ${data.length} 题 · 错题 ${Object.keys(mist).length} 题`}
+$("fullMode").onclick=()=>{practiceMode="full";$("fullMode").className="primary";$("verbMode").className="";render()};$("verbMode").onclick=()=>{practiceMode="verbs";$("verbMode").className="primary";$("fullMode").className="";render()};$("all").onclick=()=>{view="all";$("all").className="primary";$("mistakes").className="";refresh()};$("mistakes").onclick=()=>{view="mist";$("mistakes").className="primary";$("all").className="";refresh()};$("next").onclick=next;$("prev").onclick=prev;$("shuffle").onclick=()=>{list.sort(()=>Math.random()-.5);idx=0;render()};$("answerToggle").onclick=()=>{if(!list.length)return;const b=$("answerBox"),show=b.style.display==="none";b.style.display=show?"block":"none";$("answerToggle").textContent=show?"🙈 隐藏答案":"👁 显示答案"};
+$("online").onclick=async()=>{try{const r=await fetch("./questions.xlsx?v="+Date.now(),{cache:"no-store"});if(!r.ok)throw new Error("找不到 questions.xlsx");const n=await importBuffer(await r.arrayBuffer(),"☁️ 在线题库");alert("✓ 在线题库加载成功："+n+"题")}catch(e){alert("在线题库加载失败：\n"+e.message)}};
+$("file").onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const n=await importBuffer(await f.arrayBuffer(),"📂 "+f.name);alert("✓ 本地 Excel 导入成功："+n+"题")}catch(err){alert("本地 Excel 导入失败：\n"+err.message)}e.target.value=""};
+refresh();const saved=localStorage.getItem("wb_source");if(saved)$("sourceStatus").textContent=`当前题库：${saved} · ${data.length}题`;
+(async()=>{try{const r=await fetch("./questions.xlsx?v="+Date.now(),{cache:"no-store"});if(r.ok)await importBuffer(await r.arrayBuffer(),"☁️ 在线题库")}catch(e){}})();
+</script></main></body></html>
